@@ -1,0 +1,326 @@
+import boto3
+import json
+from datetime import datetime, timedelta
+from collections import defaultdict
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import os
+
+# Constants
+REGION = os.environ['AWS_REGION']
+SENDER_EMAIL = os.environ['SENDER_EMAIL']
+RECIPIENT_EMAIL = os.environ['RECIPIENT_EMAIL']
+COMPLETED_LOOKBACK_DAYS = 7
+
+# Initialize AWS clients
+sms_client = boto3.client('pinpoint-sms-voice-v2', region_name=REGION)
+ses_client = boto3.client('ses', region_name=REGION)
+
+# Global registration dictionary
+registrations = {
+    'REQUIRES_UPDATES': defaultdict(list),
+    'CREATED': defaultdict(list),
+    'COMPLETED': defaultdict(list),
+    'REVIEWING': defaultdict(list)
+}
+
+def get_console_url(registration_id):
+    return f"https://{REGION}.console.aws.amazon.com/sms-voice/home?region={REGION}#/registrations?registration-id={registration_id}"
+
+def get_version_details(registration_id, latest_denied_version=None):
+    try:
+        if latest_denied_version:
+            response = sms_client.describe_registration_versions(
+                RegistrationId=registration_id,
+                VersionNumbers=[latest_denied_version]
+            )
+        else:
+            response = sms_client.describe_registration_versions(
+                RegistrationId=registration_id,
+                MaxResults=1
+            )
+        
+        if response['RegistrationVersions']:
+            return response['RegistrationVersions'][0]
+    except Exception as e:
+        print(f"Error getting version details for {registration_id}: {str(e)}")
+    return None
+
+def is_recently_completed(version_info):
+    if 'RegistrationVersionStatusHistory' in version_info:
+        history = version_info['RegistrationVersionStatusHistory']
+        if 'ApprovedTimestamp' in history:
+            approved_time = history['ApprovedTimestamp']
+            if isinstance(approved_time, datetime):
+                approved_time = approved_time.timestamp()
+            lookback_time = (datetime.now() - timedelta(days=COMPLETED_LOOKBACK_DAYS)).timestamp()
+            return approved_time > lookback_time
+    return False
+
+def categorize_registration_type(registration_type):
+    if 'TEN_DLC' in registration_type:
+        return 'TEN_DLC'
+    elif 'LONG_CODE' in registration_type:
+        return 'LONG_CODE'
+    elif 'SHORT_CODE' in registration_type:
+        return 'SHORT_CODE'
+    elif 'SENDER_ID' in registration_type:
+        return 'SENDER_ID'
+    elif 'TOLL_FREE' in registration_type:
+        return 'TOLL_FREE'
+    else:
+        return 'OTHER'
+
+def categorize_registrations():
+    global registrations
+    registrations = {
+        'REQUIRES_UPDATES': defaultdict(list),
+        'CREATED': defaultdict(list),
+        'COMPLETED': defaultdict(list),
+        'REVIEWING': defaultdict(list)
+    }
+
+    try:
+        response = sms_client.describe_registrations()
+        
+        for registration in response.get('Registrations', []):
+            status = registration['RegistrationStatus']
+            registration_id = registration['RegistrationId']
+            registration_type = registration['RegistrationType']
+            category = categorize_registration_type(registration_type)
+            
+            reg_info = {
+                'id': registration_id,
+                'type': registration_type,
+                'status': status,
+                'version': registration['CurrentVersionNumber'],
+                'console_url': get_console_url(registration_id)
+            }
+
+            if 'AdditionalAttributes' in registration:
+                reg_info['additional_attributes'] = registration['AdditionalAttributes']
+
+            if status == 'REQUIRES_UPDATES':
+                latest_denied_version = registration.get('LatestDeniedVersionNumber')
+                version_info = get_version_details(registration_id, latest_denied_version)
+                if version_info and 'DeniedReasons' in version_info:
+                    reg_info['denial_reasons'] = version_info['DeniedReasons']
+                registrations['REQUIRES_UPDATES'][category].append(reg_info)
+            
+            elif status == 'CREATED':
+                registrations['CREATED'][category].append(reg_info)
+            
+            elif status == 'REVIEWING':
+                registrations['REVIEWING'][category].append(reg_info)
+            
+            elif status == 'COMPLETE':
+                version_info = get_version_details(registration_id)
+                if version_info and is_recently_completed(version_info):
+                    approved_timestamp = version_info['RegistrationVersionStatusHistory']['ApprovedTimestamp']
+                    if isinstance(approved_timestamp, datetime):
+                        approved_timestamp = approved_timestamp.timestamp()
+                    reg_info['approved_timestamp'] = approved_timestamp
+                    registrations['COMPLETED'][category].append(reg_info)
+                
+    except Exception as e:
+        print(f"Error listing registrations: {str(e)}")
+        raise e
+
+def generate_html_output():
+    html = """
+    <html>
+    <head>
+        <style>
+            body { 
+                font-family: Arial, sans-serif;
+                margin: 20px;
+                line-height: 1.6;
+            }
+            .registration-group { margin: 20px 0; }
+            .registration-category { 
+                background-color: #f0f0f0;
+                padding: 10px;
+                margin: 10px 0;
+                border-radius: 5px;
+            }
+            .registration-item {
+                border-left: 4px solid #ccc;
+                margin: 10px 0;
+                padding: 10px;
+                background-color: #ffffff;
+            }
+            .requires-updates { border-left-color: #ff9900; }
+            .created { border-left-color: #007bff; }
+            .completed { border-left-color: #28a745; }
+            .reviewing { border-left-color: #6c757d; }
+            .denial-reasons {
+                background-color: #fff3f3;
+                padding: 10px;
+                margin: 5px 0;
+                border-radius: 3px;
+            }
+            .console-link {
+                color: #007bff;
+                text-decoration: none;
+                padding: 2px 5px;
+                border: 1px solid #007bff;
+                border-radius: 3px;
+            }
+            .console-link:hover {
+                background-color: #007bff;
+                color: #ffffff;
+            }
+            .summary {
+                margin: 20px 0;
+                padding: 15px;
+                background-color: #e9ecef;
+                border-radius: 5px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .divider {
+                border-top: 2px solid #dee2e6;
+                margin: 20px 0;
+            }
+            .lookback-info {
+                background-color: #e2e3e5;
+                padding: 10px;
+                border-radius: 5px;
+                margin: 10px 0;
+                font-style: italic;
+            }
+            h2, h3, h4 {
+                color: #333;
+                margin-top: 20px;
+            }
+            ul {
+                margin: 5px 0;
+                padding-left: 20px;
+            }
+            li {
+                margin: 5px 0;
+            }
+        </style>
+    </head>
+    <body>
+    """
+
+    html += f"<h2>Registration Status Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</h2>"
+
+    html += f"""
+    <div class="lookback-info">
+        Note: Completed registrations shown are those completed within the last {COMPLETED_LOOKBACK_DAYS} days.
+    </div>
+    """
+
+    html += '<div class="summary"><h3>Summary</h3>'
+    for status, categories in registrations.items():
+        total = sum(len(regs) for regs in categories.values())
+        html += f"<p><strong>{status}:</strong> {total}"
+        if status == 'COMPLETED':
+            html += f" (last {COMPLETED_LOOKBACK_DAYS} days)"
+        html += "<br>"
+        for category, regs in categories.items():
+            if regs:
+                html += f"&nbsp;&nbsp;{category}: {len(regs)}<br>"
+        html += "</p>"
+    grand_total = sum(sum(len(regs) for regs in categories.values()) for categories in registrations.values())
+    html += f"<p><strong>Total Registrations:</strong> {grand_total}</p>"
+    html += "</div>"
+
+    html += '<div class="divider"></div>'
+
+    html += "<h3>Detailed Registration Status</h3>"
+
+    for status, categories in registrations.items():
+        total = sum(len(regs) for regs in categories.values())
+        html += f"""
+        <div class="registration-group">
+            <h3>{status} Registrations (Total: {total})</h3>
+        """
+
+        for category, regs in categories.items():
+            if regs:
+                html += f"""
+                <div class="registration-category">
+                    <h4>{category} Registrations ({len(regs)})</h4>
+                """
+
+                for reg in regs:
+                    css_class = status.lower().replace('_', '-')
+                    html += f"""
+                    <div class="registration-item {css_class}">
+                        <strong>Registration ID:</strong> {reg['id']}<br>
+                        <strong>Type:</strong> {reg['type']}<br>
+                        <strong>Status:</strong> {reg['status']}<br>
+                        <strong>Version:</strong> {reg['version']}<br>
+                        <strong>Console:</strong> <a href="{reg['console_url']}" class="console-link" target="_blank">Open in Console</a><br>
+                    """
+
+                    if (reg['type'] == 'US_TEN_DLC_BRAND_VETTING' and 
+                        status == 'COMPLETED' and 
+                        'additional_attributes' in reg and 
+                        'VETTING_SCORE' in reg['additional_attributes']):
+                        html += f"<strong>Vetting Score:</strong> {reg['additional_attributes']['VETTING_SCORE']}<br>"
+
+                    if status == 'REQUIRES_UPDATES' and reg.get('denial_reasons'):
+                        html += '<div class="denial-reasons"><strong>Denial Reasons:</strong><ul>'
+                        for reason in reg['denial_reasons']:
+                            html += f"""
+                            <li>
+                                <strong>{reason.get('Reason', 'N/A')}</strong><br>
+                                {reason.get('ShortDescription', 'N/A')}<br>
+                            """
+                            if reason.get('LongDescription'):
+                                html += f"{reason['LongDescription']}<br>"
+                            if reason.get('DocumentationLink'):
+                                html += f'<a href="{reason["DocumentationLink"]}" target="_blank">Documentation</a>'
+                            html += "</li>"
+                        html += "</ul></div>"
+
+                    if status == 'COMPLETED':
+                        approved_time = datetime.fromtimestamp(reg['approved_timestamp']).strftime('%Y-%m-%d %H:%M:%S')
+                        html += f"<strong>Approved:</strong> {approved_time}<br>"
+
+                    html += "</div>"
+                html += "</div>"
+        html += "</div>"
+
+    html += "</body></html>"
+    return html
+
+def send_email(html_content, subject, recipient):
+    msg = MIMEMultipart('mixed')
+    msg['Subject'] = subject
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = recipient
+
+    html_part = MIMEText(html_content, 'html')
+    msg.attach(html_part)
+
+    try:
+        response = ses_client.send_raw_email(
+            Source=msg['From'],
+            Destinations=[recipient],
+            RawMessage={'Data': msg.as_string()}
+        )
+        print(f"Email sent! Message ID: {response['MessageId']}")
+    except Exception as e:
+        print(f"Error sending email: {str(e)}")
+        raise e
+
+def lambda_handler(event, context):
+    try:
+        print("Starting registration categorization...")
+        categorize_registrations()
+        
+        print("Generating HTML report...")
+        html_content = generate_html_output()
+        
+        print("Sending email...")
+        subject = f"End User Messaging SMS Registration Status Report - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        send_email(html_content, subject, RECIPIENT_EMAIL)
+        
+        return {'statusCode': 200, 'body': json.dumps('Registration status report generated and sent successfully')}
+    except Exception as e:
+        print(f"Error in lambda execution: {str(e)}")
+        return {'statusCode': 500, 'body': json.dumps(f'Error generating report: {str(e)}')}
