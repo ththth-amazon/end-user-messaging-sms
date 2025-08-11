@@ -1,0 +1,99 @@
+SMART ENCODE SMS TEST EVENTS
+===============================
+
+INSTRUCTIONS: Copy individual JSON objects (without comments) into AWS Lambda test events.
+Remove all comment lines (// Test X:...) when pasting into Lambda.
+
+TEST 1: Segment Limit - REJECT Mode
+{
+  "phoneNumber": "+17144695773",
+  "message": "This is a very long message that contains no Unicode characters at all. It uses only standard GSM characters like regular quotes, hyphens, and asterisks. However, this message is definitely longer than 160 characters which means it will be split into multiple GSM segments. With reject mode, this should return an error since it exceeds our 1-segment limit.",
+  "originationNumber": "+18889966807",
+  "configurationSetName": "wide-open",
+  "dryRun": false,
+  "maxSegments": 1,
+  "segmentLimitAction": "reject"
+}
+
+TEST 2: Segment Limit - TRUNCATE Mode
+{
+  "phoneNumber": "+17144695773",
+  "message": "This is a very long message that will be automatically shortened to fit within the segment limit. The truncation feature intelligently cuts at word boundaries and adds ellipsis to indicate the message was shortened.",
+  "originationNumber": "+18889966807",
+  "configurationSetName": "wide-open",
+  "dryRun": false,
+  "maxSegments": 1,
+  "segmentLimitAction": "truncate"
+}
+
+TEST 3: Smart Preservation - Auto-Preserve Short Message
+{
+  "phoneNumber": "+17144695773",
+  "message": "\uD83D\uDE80 Launch today! Save 50% \u2014 limited time offer!",
+  "originationNumber": "+18889966807",
+  "configurationSetName": "wide-open",
+  "dryRun": false,
+  "maxSegments": 1
+}
+
+TEST 4: Smart Preservation - Auto-Convert Long Message
+{
+  "phoneNumber": "+17144695773",
+  "message": "\uD83D\uDE80 Launch today! Save 50% \u2014 limited time offer! Get premium features at discount price. Don\u2019t miss out on this amazing deal!",
+  "originationNumber": "+18889966807",
+  "configurationSetName": "wide-open",
+  "dryRun": false,
+  "maxSegments": 1
+}
+
+TEST 5: Emoji Preservation - Keep Brand Emojis
+{
+  "phoneNumber": "+17144695773",
+  "message": "\uD83D\uDE80 Launch special! Save 50% today \u2014 limited time offer \u2022 Free shipping \u2022 30-day guarantee. Don\u2019t wait\u2026 call now! \u00A9 2024 Company",
+  "originationNumber": "+18889966807",
+  "configurationSetName": "wide-open",
+  "dryRun": false,
+  "preserveEmojis": true
+}
+
+TEST 6: Cost Comparison - Expensive (No Conversion)
+{
+  "phoneNumber": "+17144695773",
+  "message": "ALERT: Account security issue detected! Suspicious activity from multiple locations \u2014 immediate action required. Steps: \u2022 Verify your identity \u2022 Update password \u2022 Enable 2FA \u2022 Contact support team. Don\u2019t delay \u2014 your account security is at risk! Call 1-800-SECURITY now. We never request sensitive info via text \u2014 only through official channels. \u00A9 2024 SecureBank.",
+  "originationNumber": "+18889966807",
+  "configurationSetName": "wide-open",
+  "dryRun": false,
+  "enableConversion": false
+}
+
+TEST 7: Cost Comparison - Cheaper (With Conversion)
+{
+  "phoneNumber": "+17144695773",
+  "message": "ALERT: Account security issue detected! Suspicious activity from multiple locations \u2014 immediate action required. Steps: \u2022 Verify your identity \u2022 Update password \u2022 Enable 2FA \u2022 Contact support team. Don\u2019t delay \u2014 your account security is at risk! Call 1-800-SECURITY now. We never request sensitive info via text \u2014 only through official channels. \u00A9 2024 SecureBank.",
+  "originationNumber": "+18889966807",
+  "configurationSetName": "wide-open",
+  "dryRun": false,
+  "enableConversion": true
+}
+
+TEST 8: Combined Features - Unicode + Truncate
+{
+  "phoneNumber": "+17144695773",
+  "message": "\uD83D\uDE80 MEGA SALE! This is a very long marketing message with Unicode characters \u2014 em dashes, \u2022 bullet points, \u201Csmart quotes\u201D, and \u00A9 copyright symbols. The message is intentionally long to test both Unicode conversion and truncation features working together.",
+  "originationNumber": "+18889966807",
+  "configurationSetName": "wide-open",
+  "dryRun": false,
+  "maxSegments": 1,
+  "segmentLimitAction": "truncate",
+  "enableConversion": true
+}
+
+TEST 9: Comprehensive Unicode Character Test
+{
+  "phoneNumber": "+17144695773",
+  "message": "Comprehensive test: Smart quotes \u201CHello\u201D and \u2018world\u2019, angle quotes \u00ABtest\u00BB, fractions \u00BC \u00BD \u00BE, dashes \u2014 and \u2013, bullets \u2022, ellipsis\u2026, fullwidth chars \uFF01\uFF1F\uFF0C\uFF0E, math \u2264\u2265\u2260\u00B1, symbols \u00A9\u00AE\u2122\u00B0, asterisks \u2731\u2732\u2733, and various spaces\u2000\u2001\u2002between\u2003words.",
+  "originationNumber": "+18889966807",
+  "configurationSetName": "wide-open",
+  "dryRun": false,
+  "enableConversion": true
+}
